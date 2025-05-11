@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Creditor Management System</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>💰 CREDITOR MANAGEMENT SYSTEM</h1>
+            <p>📅 Today: <span id="current-date"></span></p>
+        </header>
+
+        <section class="top-section">
+            <!-- Add Creditor Form -->
+            <div class="form-card">
+                <h3>➕ ADD NEW CREDITOR</h3>
+                <div class="form-row">
+                    <input type="text" id="name" placeholder="ENTER CREDITOR NAME">
+                    <button class="btn-primary" onclick="addCreditor()">
+                        <i class="fas fa-plus"></i> ADD
+                    </button>
+                </div>
+                <div id="name-error"></div>
+            </div>
+
+            <!-- Today's Payees -->
+            <div class="payees-card">
+                <div class="card-header">
+                    <h3>📋 TODAY'S PAYEES</h3>
+                    <span class="badge" id="payee-count">0</span>
+                </div>
+                <div class="payees-list" id="today-payees">
+                    <!-- Dynamic content will be inserted here -->
+                </div>
+            </div>
+        </section>
+
+        <section class="creditors-list">
+            <div class="section-header">
+                <h2>ALL CREDITORS</h2>
+                <div class="search-container">
+                    <input type="text" id="searchInput" placeholder="Search creditors..." class="search-input">
+                    <i class="fas fa-search search-icon"></i>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>NAME</th>
+                        <th>LAST VISIT DATE</th>
+                        <th>FOLLOW-UP DATE</th>
+                        <th>STATUS</th>
+                        <th>ACTIONS</th>
+                    </tr>
+                </thead>
+                <tbody id="creditors-container">
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <!-- Calendar Modal -->
+    <div class="calendar-modal" id="calendarModal">
+        <div class="calendar-content">
+            <div class="calendar-header">
+                <h2>SELECT FOLLOW-UP DATE</h2>
+                <button class="btn-cancel" onclick="closeCalendar()">&times;</button>
+            </div>
+            <input type="date" id="modalDatePicker" min="">
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeCalendar()">CANCEL</button>
+                <button class="btn-success" onclick="saveReschedule()">SAVE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Panel -->
+    <div class="panel-overlay" id="panelOverlay"></div>
+    <div class="history-panel" id="historyPanel">
+        <div class="history-header">
+            <h2>Payment History for <span id="history-creditor-name"></span></h2>
+            <button class="history-close" onclick="closeHistoryPanel()">&times;</button>
+        </div>
+        <div class="history-content" id="historyContent">
+            <!-- History items will be inserted here -->
+        </div>
+        <div class="history-footer">
+            <button class="delete-btn" onclick="deleteCreditor()" title="Delete Creditor">
+                <i class="fas fa-trash"></i>
+            </button>
+        </div>
+    </div>
+
+   <script src="script.js"></script>
+</body>
+</html>
