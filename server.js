@@ -43,18 +43,27 @@ const Subscriber = mongoose.model('Subscriber', subscriberSchema);
 // --- Telegram Bot Setup ---
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// --- Register Bot Commands ---
-bot.telegram.setMyCommands([
-  { command: 'start', description: 'Show subscription menu' },
-  { command: 'subscribe', description: 'Enable daily updates' },
-  { command: 'unsubscribe', description: 'Disable notifications' }
-]);
+// --- Unified Subscription Handler ---
+async function handleSubscription(ctx, subscribe) {
+  try {
+    await Subscriber.findOneAndUpdate(
+      { chatId: ctx.chat.id },
+      { isSubscribed: subscribe },
+      { upsert: true, new: true }
+    );
+    
+    const message = subscribe 
+      ? '🎉 You\'re now subscribed to daily updates!' 
+      : '🔕 You\'ve unsubscribed from updates.';
+      
+    await ctx.reply(message);
+  } catch (err) {
+    console.error('Subscription error:', err);
+    await ctx.reply('⚠️ Error updating subscription. Please try again.');
+  }
+}
 
-// --- Command Handlers ---
-bot.start(async (ctx) => {
-  await showSubscriptionButtons(ctx);
-});
-
+// --- Text Commands ---
 bot.command('subscribe', async (ctx) => {
   await handleSubscription(ctx, true);
 });
@@ -63,41 +72,11 @@ bot.command('unsubscribe', async (ctx) => {
   await handleSubscription(ctx, false);
 });
 
-// --- Button Handlers ---
-bot.action('subscribe', async (ctx) => {
-  await handleSubscription(ctx, true);
-  await ctx.answerCbQuery();
-});
-
-bot.action('unsubscribe', async (ctx) => {
-  await handleSubscription(ctx, false);
-  await ctx.answerCbQuery();
-});
-
-// --- Common Subscription Handler ---
-async function handleSubscription(ctx, subscribe) {
-  try {
-    await Subscriber.findOneAndUpdate(
-      { chatId: ctx.chat.id },
-      { isSubscribed: subscribe },
-      { upsert: true, new: true }
-    );
-
-    const message = subscribe 
-      ? '🎉 You\'re now subscribed to daily updates!' 
-      : '🔕 You\'ve unsubscribed from updates.';
-    
-    await ctx.reply(message);
-  } catch (err) {
-    console.error('Subscription error:', err);
-    await ctx.reply('⚠️ Error updating subscription. Please try again.');
-  }
-}
-
-async function showSubscriptionButtons(ctx) {
+// --- Inline Buttons ---
+bot.start(async (ctx) => {
   const buttons = Markup.inlineKeyboard([
-    [Markup.button.callback('✅ Subscribe', 'subscribe')],
-    [Markup.button.callback('❌ Unsubscribe', 'unsubscribe')]
+    [Markup.button.callback('✅ Subscribe', 'subscribe_btn')],
+    [Markup.button.callback('❌ Unsubscribe', 'unsubscribe_btn')]
   ]);
 
   await ctx.replyWithMarkdown(
@@ -105,33 +84,47 @@ async function showSubscriptionButtons(ctx) {
     'Choose your notification preference:',
     buttons
   );
-}
+});
+
+bot.action('subscribe_btn', async (ctx) => {
+  await handleSubscription(ctx, true);
+  await ctx.answerCbQuery();
+});
+
+bot.action('unsubscribe_btn', async (ctx) => {
+  await handleSubscription(ctx, false);
+  await ctx.answerCbQuery();
+});
 
 // --- Scheduled Notifications ---
 cron.schedule('0 12,18 * * *', async () => {
   try {
+    // Get IST day boundaries
     const istDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
     const todayStart = new Date(istDate);
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date(istDate);
     todayEnd.setHours(23, 59, 59, 999);
 
+    // Find pending payees
     const pendingPayees = await Creditor.find({
       status: 'pending',
       followUp: { $gte: todayStart, $lte: todayEnd }
     });
 
+    // Prepare message with last visit date (no time)
     let message;
     if (pendingPayees.length > 0) {
-      message = "📋 *Pending Payees Reminder* 📋\n\n";
+      message = "📋 *Today's Payment Reminder* 📋\n\n";
       pendingPayees.forEach((payee, index) => {
         message += `${index + 1}. ${payee.name}\n`;
-        message += `   Follow-up: ${new Date(payee.followUp).toLocaleDateString('en-IN')}\n\n`;
+        message += `   Last-Visit: ${new Date(payee.lastVisit).toLocaleDateString('en-IN')}\n\n`;
       });
     } else {
       message = '🎉 *No pending payees for today!*';
     }
 
+    // Send to all subscribers
     const subscribers = await Subscriber.find({ isSubscribed: true });
     for (const sub of subscribers) {
       try {
@@ -162,7 +155,46 @@ app.post('/api/creditors', async (req, res) => {
   }
 });
 
-// ... Keep other API routes same as previous version ...
+app.get('/api/creditors', async (req, res) => {
+  try {
+    const list = await Creditor.find().sort({ followUp: 1 });
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/creditors/:id', async (req, res) => {
+  try {
+    const { historyEntry, ...fields } = req.body;
+    const updateDoc = {};
+    if (Object.keys(fields).length) updateDoc.$set = fields;
+    if (historyEntry) updateDoc.$push = { history: historyEntry };
+
+    const updated = await Creditor.findByIdAndUpdate(
+      req.params.id,
+      updateDoc,
+      { new: true }
+    );
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/creditors/:id', async (req, res) => {
+  try {
+    await Creditor.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// --- SPA Fallback ---
+app.get(/.*/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // --- Start Services ---
 const PORT = process.env.PORT || 4000;
@@ -170,13 +202,9 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
 
-bot.launch()
-  .then(() => {
-    console.log('🤖 Telegram bot started and commands are active!');
-  })
-  .catch(err => {
-    console.error('❌ Telegram bot failed to start:', err);
-  });
+bot.launch().then(() => {
+  console.log('🤖 Telegram bot started');
+});
 
 // --- Graceful Shutdown ---
 process.once('SIGINT', () => {
