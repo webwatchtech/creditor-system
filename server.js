@@ -97,7 +97,7 @@ bot.action('unsubscribe_btn', async (ctx) => {
 });
 
 // --- Scheduled Notifications ---
-cron.schedule('0 12,18 * * *', async () => {
+cron.schedule('0 12,17,19 * * *', async () => {
   try {
     // Get IST day boundaries
     const istDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
