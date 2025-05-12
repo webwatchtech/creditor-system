@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { Telegraf } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
 const cron = require('node-cron');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -8,75 +8,126 @@ const path = require('path');
 
 const app = express();
 
-// --- MongoDB Connection ---
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
+// --- Database Connection (updated) ---
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('❌ MongoDB error:', err));
 
-// --- Mongoose Schema & Model (using server.js version) ---
+// --- Schemas & Models ---
 const creditorSchema = new mongoose.Schema({
   name: { type: String, required: true, uppercase: true },
   lastVisit: { type: Date, default: Date.now },
-  followUp: { type: Date },
-  status: { type: String, enum: ['pending', 'paid', 'overdue'], default: 'pending' },
-  history: [
-    {
-      date: { type: Date, default: Date.now },
-      action: String,
-      details: String,
-      amount: Number
-    }
-  ]
+  followUp: Date,
+  status: { 
+    type: String, 
+    enum: ['pending', 'paid', 'overdue'], 
+    default: 'pending' 
+  },
+  history: [{
+    date: { type: Date, default: Date.now },
+    action: String,
+    details: String,
+    amount: Number
+  }]
+});
+
+const subscriberSchema = new mongoose.Schema({
+  chatId: { type: String, required: true, unique: true },
+  isSubscribed: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now }
 });
 
 const Creditor = mongoose.model('Creditor', creditorSchema);
+const Subscriber = mongoose.model('Subscriber', subscriberSchema);
 
 // --- Telegram Bot Setup ---
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// --- Cron Job ---
-cron.schedule('12 01 * * *', async () => { // 19:20 in 24h format (7:20pm)
-  try {
-    // Use IST timezone for date calculations
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0); // IST midnight
+// --- Bot Commands ---
+bot.start(async (ctx) => {
+  await showSubscriptionButtons(ctx);
+});
 
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999); // IST end of day
+async function showSubscriptionButtons(ctx) {
+  const buttons = Markup.inlineKeyboard([
+    [Markup.button.callback('✅ Subscribe', 'subscribe')],
+    [Markup.button.callback('❌ Unsubscribe', 'unsubscribe')]
+  ]);
+
+  await ctx.replyWithMarkdown(
+    '🔔 *Creditor Updates Subscription* 🔔\n\n' +
+    'Choose your notification preference:',
+    buttons
+  );
+}
+
+// --- Subscription Handlers ---
+bot.action('subscribe', async (ctx) => {
+  await handleSubscriptionAction(ctx, true);
+});
+
+bot.action('unsubscribe', async (ctx) => {
+  await handleSubscriptionAction(ctx, false);
+});
+
+async function handleSubscriptionAction(ctx, subscribe) {
+  try {
+    await Subscriber.findOneAndUpdate(
+      { chatId: ctx.chat.id },
+      { isSubscribed: subscribe },
+      { upsert: true, new: true }
+    );
+
+    await ctx.answerCbQuery();
+    const message = subscribe 
+      ? '🎉 You\'re now subscribed to daily updates!' 
+      : '🔕 You\'ve unsubscribed from updates.';
+    await ctx.reply(message);
+  } catch (err) {
+    console.error('Subscription error:', err);
+    await ctx.reply('⚠️ Error updating subscription. Please try again.');
+  }
+}
+
+// --- Scheduled Notifications ---
+cron.schedule('*/1 * * * *', async () => {
+  try {
+    const istDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    const todayStart = new Date(istDate);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(istDate);
+    todayEnd.setHours(23, 59, 59, 999);
 
     const pendingPayees = await Creditor.find({
       status: 'pending',
-      followUp: {
-        $gte: todayStart,
-        $lte: todayEnd
-      }
+      followUp: { $gte: todayStart, $lte: todayEnd }
     });
 
+    let message;
     if (pendingPayees.length > 0) {
-      let message = "📋 Today's Pending Payees:\n\n";
+      message = "📋 *Today's Pending Reminder* 📋\n\n";
       pendingPayees.forEach((payee, index) => {
         message += `${index + 1}. ${payee.name}\n`;
-        message += `   Last visited: ${new Date(payee.lastVisit).toLocaleDateString('en-GB')}\n\n`;
+        // Changed to toLocaleDateString()
+        message += `   Follow-up: ${new Date(payee.followUp).toLocaleDateString('en-IN')}\n\n`;
       });
-      await bot.telegram.sendMessage(process.env.TELEGRAM_CHAT_ID, message);
     } else {
-      await bot.telegram.sendMessage(
-        process.env.TELEGRAM_CHAT_ID,
-        '📅 No pending payees for today! \n\nAll clear! 🎉'
-      );
+      message = '🎉 *No pending payees for today!*';
+    }
+
+    const subscribers = await Subscriber.find({ isSubscribed: true });
+    for (const sub of subscribers) {
+      try {
+        await bot.telegram.sendMessage(sub.chatId, message, { parse_mode: 'Markdown' });
+      } catch (err) {
+        console.error(`Failed to send to ${sub.chatId}:`, err.message);
+      }
     }
   } catch (err) {
     console.error('Cron job error:', err);
-    await bot.telegram.sendMessage(
-      process.env.TELEGRAM_CHAT_ID,
-      '⚠️ Error checking pending payees. Please check server logs.'
-    );
   }
 }, {
-  timezone: 'Asia/Kolkata' // Explicitly set timezone
+  timezone: 'Asia/Kolkata'
 });
 
 // --- Express Server Setup ---
@@ -84,7 +135,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- REST API Routes ---
+// --- API Routes ---
 app.post('/api/creditors', async (req, res) => {
   try {
     const newCreditor = await Creditor.create(req.body);
@@ -107,7 +158,6 @@ app.put('/api/creditors/:id', async (req, res) => {
   try {
     const { historyEntry, ...fields } = req.body;
     const updateDoc = {};
-
     if (Object.keys(fields).length) updateDoc.$set = fields;
     if (historyEntry) updateDoc.$push = { history: historyEntry };
 
@@ -139,12 +189,17 @@ app.get(/.*/, (req, res) => {
 // --- Start Services ---
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server listening on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
 
-bot.launch().then(() => {
-  console.log('🤖 Telegram bot started');
-});
+// Start Telegram bot with proper logging
+bot.launch()
+  .then(() => {
+    console.log('🤖 Telegram bot is started');
+  })
+  .catch((err) => {
+    console.error('❌ Telegram bot failed to start:', err);
+  });
 
 // --- Graceful Shutdown ---
 process.once('SIGINT', () => {
